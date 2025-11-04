@@ -4,4 +4,4 @@ The required python libraries are listed under anuga_install.yml to accomplish t
 The inputs such as terrain file as .tif, boundary line files .shp, unstructured mesh file as .shp,  are kept in directory named "data" inside 1_HydrodynamicModeling_ANUGA
 The data for Inlet operator (Discharge) and downstream boundary condition (time-varying water level) are in directory named "model_inputs" inside 1_HydrodynamicModeling_ANUGA
 
-
+ANUGA model simulation paired with a mesh generation package "Mesher" <https://github.com/Chrismarsh/mesher>
