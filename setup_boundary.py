@@ -32,7 +32,8 @@ f_US_BC = os.path.join(data_dir, 'ShMouth_US_BC.shp')
 f_DS_BC = os.path.join(data_dir, 'Russel_DS_Boundary.shp')
 #ds_gdf = gpd.read_file(f_DS_BC)
 
-# # ---------- helpers ----------
+
+# ---------- helpers ----------
 # def finish_plot(path=None, dpi=150):
 #     if path:
 #         plt.savefig(path, bbox_inches="tight", dpi=dpi)
@@ -45,86 +46,71 @@ f_DS_BC = os.path.join(data_dir, 'Russel_DS_Boundary.shp')
 
 
 pts = np.load(os.path.join(model_inputs_dir, 'mesh_pts.npy'),  allow_pickle=False)          # Nx2 float 
-tris = np.load(os.path.join(model_inputs_dir, 'mesh_tris.npy'), allow_pickle=True) 
-
-import dill
-# load boundary map
-f_boundary_map = os.path.join(model_inputs_dir, 'boundary_map.pkl')
-with open(f_boundary_map, 'rb') as f:
-    boundary_map = dill.load(f)
-
-# Print boundary_map summary
-from collections import Counter
-tag_counts = Counter(boundary_map.values())
-print("Boundary map summary:")
-for name, count in tag_counts.items():
-    print(f"  {name}: {count} edges")     
-
+tris = np.load(os.path.join(model_inputs_dir, 'mesh_tris.npy'), allow_pickle=True)           # Mx3 int
 
 # --- 3) Build domain safely
-#from anuga import Reflective_boundary
-domain = anuga.Domain(coordinates=pts, vertices=tris, boundary=boundary_map, verbose=True)
-#domain.set_boundary({'exterior': Reflective_boundary(domain)})
+from anuga import Reflective_boundary
+domain = anuga.Domain(coordinates=pts, vertices=tris, verbose=False)
+domain.set_boundary({'exterior': Reflective_boundary(domain)})
 
 
 
-# import os
-# import numpy as np
+import os
+import numpy as np
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
-# import anuga
-# from anuga import Reflective_boundary
+import anuga
+from anuga import Reflective_boundary
 
 # 1) domain is built from pts, tris
 # 2) DEM Sampling at vertex coords for ANUGA ---
 
 dem_path = f_DEM_tif   #  TIFF DEM
 
-pts_c = domain.get_centroid_coordinates()
-
-
-
 with rio.open(dem_path) as r:
     print("DEM CRS:", r.crs)
     L,B,R,T = r.bounds
-    inside = (pts_c[:,0] >= L) & (pts_c[:,0] <= R) & (pts_c[:,1] >= B) & (pts_c[:,1] <= T)
+    inside = (pts[:,0] >= L) & (pts[:,0] <= R) & (pts[:,1] >= B) & (pts[:,1] <= T)
     if not inside.all():
         raise RuntimeError("Mesh is outside DEM bounds. Reproject one to match the other.")
 
-    # elevations at centroids
-    Z_c = np.array([v[0] for v in r.sample(pts_c)], dtype=float)
+    # elevations at vertices
+    Zv = np.array([v[0] for v in r.sample(pts)], dtype=float)
     if r.nodata is not None:
-        Z_c[Z_c == r.nodata] = np.nan
+        Zv[Zv == r.nodata] = np.nan
     # fill NaN with nearest)
-    if np.isnan(Z_c).any():
-        Z_c[np.isnan(Z_c)] = np.nanmin(Z_c)
+    if np.isnan(Zv).any():
+        Zv[np.isnan(Zv)] = np.nanmin(Zv)
 
-# set domain elevation on centroids
-domain.set_quantity('elevation', Z_c, location='centroids')
+# set domain elevation on vertices
 q = domain.quantities['elevation']
-q.set_values(Z_c, location='centroids')  
+q.set_values(Zv, location='vertices')  
 
-elev_c = domain.quantities['elevation'].centroid_values
-print("Domain elevation stats (m):", float(elev_c.min()), float(elev_c.max()))
+elev_v = domain.quantities['elevation'].vertex_values
+print("Domain elevation stats (m):", float(elev_v.min()), float(elev_v.max()))
 
 # Plot elevation on mesh over DEM background and save as image
-triang = mtri.Triangulation(pts[:,0], pts[:,1], tris)
+# triang = mtri.Triangulation(pts[:,0], pts[:,1], tris)
+# z_cell = domain.get_quantity('elevation').centroid_values
 
+# with rio.open(dem_path) as r:
+#     dem = r.read(1, masked=True)
+#     extent = (r.bounds.left, r.bounds.right, r.bounds.bottom, r.bounds.top)
 
-with rio.open(dem_path) as r:
-    dem = r.read(1, masked=True)
-    extent = (r.bounds.left, r.bounds.right, r.bounds.bottom, r.bounds.top)
+# fig, ax = plt.subplots(figsize=(8,7), dpi=200)
+# ax.imshow(dem, extent=extent, origin="upper", alpha=0.5)
+# pc = ax.tripcolor(triang, facecolors=z_cell, cmap="terrain", shading="flat")
+# ax.triplot(triang, linewidth=0.15, alpha=0.35, color='k')
+# plt.colorbar(pc, ax=ax, fraction=0.04, label="Elevation (m)")
+# ax.set_aspect("equal", adjustable="box")
+# ax.set_title("Interpolated Elevation on Mesh")
+# plt.tight_layout()
 
-fig, ax = plt.subplots(figsize=(8,7), dpi=72)
-ax.imshow(dem, extent=extent, origin="upper", alpha=0.5)
-pc = ax.tripcolor(triang, facecolors=elev_c, cmap="terrain", shading="flat")
-ax.triplot(triang, linewidth=0.15, alpha=0.35, color='k')
-plt.colorbar(pc, ax=ax, fraction=0.04, label="Elevation (m)")
-ax.set_aspect("equal", adjustable="box")
-ax.set_title("Interpolated Elevation on Mesh")
-plt.tight_layout()
-plt.show()
+# if anuga.myid == 0:  # only rank 0 writes files
+#     finish_plot(os.path.join(model_visuals_dir, "DEM_meshed.png"))
+#plt.savefig(os.path.join(model_visuals_dir, "DEM_meshed.png"), bbox_inches="tight")
+#plt.show()
 
 
 
@@ -208,7 +194,14 @@ f_model_settings_out = os.path.join(model_inputs_dir, 'model_settings.py')
 if os.path.exists(f_model_settings_in):
     os.replace(f_model_settings_in, f_model_settings_out)
 
+# Import all settings as global variables
+if 'google.colab' not in sys.modules:
+    from model_inputs.model_settings import *
+else:
+    from model_inputs.collab.model_settings import *
 
+
+# In[28]:
 
 
 #get_ipython().run_line_magic('matplotlib', 'inline')
@@ -239,39 +232,37 @@ level_function = at.GenerateTideGauge(filename = f_level_clean,
 
 
 # Data visualization
-#t = (sim_time-sim_time[0]).astype('timedelta64[s]').astype(float)
-t = sim_time - sim_time[0]
-print(t)
-t = t.total_seconds().to_numpy()
-print(t)
+t = (sim_time-sim_time[0]).astype('timedelta64[s]').astype(float)
 discharge_ts = [discharge_function(i) for i in t]
 level_ts = [level_function(i) for i in t]
 
-fig, [ax1, ax2] = plt.subplots(2, 1, figsize=(6,4), dpi=100)
-ax1.plot(sim_time, discharge_ts, label=discharge_gauge_ID[1])
-ax1.legend()
-ax1.grid('on')
-ax1.set_ylabel('Discharge [m$^3$/s]')
-ax1.set_xticklabels([])
+# fig, [ax1, ax2] = plt.subplots(2, 1, figsize=(6,4), dpi=100)
+# ax1.plot(sim_time, discharge_ts, label=discharge_gauge_ID[1])
+# ax1.legend()
+# ax1.grid('on')
+# ax1.set_ylabel('Discharge [m$^3$/s]')
+# ax1.set_xticklabels([])
 
-ax2.plot(sim_time, level_ts, label=level_gauge_ID[1])
-ax2.legend()
-ax2.grid('on')
-ax2.set_xlabel('Date [yyyy-mm-dd]')
-ax2.set_ylabel('Water Level [m]')
-for tick in ax2.get_xticklabels():
-    tick.set_rotation(30)
+# ax2.plot(sim_time, level_ts, label=level_gauge_ID[1])
+# ax2.legend()
+# ax2.grid('on')
+# ax2.set_xlabel('Date [yyyy-mm-dd]')
+# ax2.set_ylabel('Water Level [m]')
+# for tick in ax2.get_xticklabels():
+#     tick.set_rotation(30)
 
 
 # if anuga.myid == 0:  # only rank 0 writes files
 #     finish_plot(os.path.join(model_visuals_dir, "hydrodynamic_inputs.png"))
 #plt.savefig(os.path.join(model_visuals_dir, 'hydrodynamic_inputs.png'))
-plt.show()
+#plt.show()
 
+
+# In[29]:
 
 
 # Fill elevation NaNs if any after DEM interpolation
-elev = domain.get_quantity('elevation').centroid_values
+elev = domain.get_quantity('elevation').get_values(location='vertices')
 if np.isnan(elev).any():
     print(f" Found {np.isnan(elev).sum()} NaNs in interpolated elevation — replacing with mean elevation.")
     elev[np.isnan(elev)] = np.nanmean(elev)
@@ -279,7 +270,9 @@ if np.isnan(elev).any():
 
 
 
-# Set up the model 
+# Set up the model
+# Initial water level
+domain.set_quantity('elevation', Zv, location='vertices') 
 domain.set_quantity('stage', expression='elevation')  # 10 cm
 # Initial time
 domain.set_starttime(0) 
@@ -290,6 +283,7 @@ domain.set_low_froude(1) # Use low-froude DE1 to reduce flux damping
 domain.set_minimum_allowed_height(0.1) # Only store heights > the given value 10 cm
 
 
+# In[31]:
 
 # Load discharge transect US/BC
 discharge_transect_gdf = gpd.read_file(f_US_BC)
@@ -393,7 +387,7 @@ print(f"Edges within tol of DS: {near_mask.sum()}")
 
 # (Optional plot)
 fig, ax = plt.subplots(figsize=(6,6), dpi=140)
-ax.scatter(pts_c[:,0], pts_c[:,1], s=1, alpha=0.2)
+ax.scatter(pts[:,0], pts[:,1], s=1, alpha=0.2)
 ax.plot(*US.xy, lw=2, label='US line')
 ax.plot(*DS.xy, lw=2, label='DS line')
 # draw some exterior edges
@@ -413,189 +407,95 @@ fig.tight_layout()
 #     finish_plot(os.path.join(model_visuals_dir, "exterior_edges_near_DS.png"))
 
 # -------------------- 5) Build boundary map --------------------
-# boundary_map = {}
-# n_inlet = n_outlet = 0
-# # Uses boundary segment distance
-# for ((tri_id, e), seg, _, _) in items:
-#     dUS = seg.distance(US)
-#     dDS = seg.distance(DS)
-#     if dUS <= tol:
-#         boundary_map[(tri_id, e)] = "inlet";  n_inlet += 1
-#     elif dDS <= tol:
-#         boundary_map[(tri_id, e)] = "outlet"; n_outlet += 1
-#     else:
-#         boundary_map[(tri_id, e)] = "sides"
+boundary_map = {}
+n_inlet = n_outlet = 0
+# Uses boundary segment distance
+for ((tri_id, e), seg, _, _) in items:
+    dUS = seg.distance(US)
+    dDS = seg.distance(DS)
+    if dUS <= tol:
+        boundary_map[(tri_id, e)] = "inlet";  n_inlet += 1
+    elif dDS <= tol:
+        boundary_map[(tri_id, e)] = "outlet"; n_outlet += 1
+    else:
+        boundary_map[(tri_id, e)] = "sides"
 
-# print(f"Tagged edges -> inlet: {n_inlet}, outlet: {n_outlet}, sides: {len(items)-n_inlet-n_outlet}")
+print(f"Tagged edges -> inlet: {n_inlet}, outlet: {n_outlet}, sides: {len(items)-n_inlet-n_outlet}")
 
-# if n_outlet == 0:
-#     tol2 = max(tol, min(BASE_TOL, dists.min()*1.25 + 1.0))
-#     print(f"Retry with larger tol = {tol2:.2f} m")
-#     boundary_map.clear(); n_inlet = n_outlet = 0
-#     for ((tri_id, e), seg, _, _) in items:
-#         dUS = seg.distance(US)
-#         dDS = seg.distance(DS)
-#         if dUS <= tol2:
-#             boundary_map[(tri_id, e)] = "inlet";  n_inlet += 1
-#         elif dDS <= tol2:
-#             boundary_map[(tri_id, e)] = "outlet"; n_outlet += 1
-#         else:
-#             boundary_map[(tri_id, e)] = "sides"
+if n_outlet == 0:
+    tol2 = max(tol, min(BASE_TOL, dists.min()*1.25 + 1.0))
+    print(f"Retry with larger tol = {tol2:.2f} m")
+    boundary_map.clear(); n_inlet = n_outlet = 0
+    for ((tri_id, e), seg, _, _) in items:
+        dUS = seg.distance(US)
+        dDS = seg.distance(DS)
+        if dUS <= tol2:
+            boundary_map[(tri_id, e)] = "inlet";  n_inlet += 1
+        elif dDS <= tol2:
+            boundary_map[(tri_id, e)] = "outlet"; n_outlet += 1
+        else:
+            boundary_map[(tri_id, e)] = "sides"
     
 
-#     if n_outlet == 0:
-#         raise RuntimeError(
-#             "no 'outlet', line not touching domain, extend to cross the domain boundary"
-#             )
+    if n_outlet == 0:
+        raise RuntimeError(
+            "no 'outlet', line not touching domain, extend to cross the domain boundary"
+            )
 
 
-# # In[35]:
+# In[35]:
 
-# # In[36]:
+# In[36]:
 
 
-# # Tag boundaries
-# from collections import defaultdict
-# import numpy as np
-# import anuga
+# Tag boundaries
+from collections import defaultdict
+import numpy as np
+import anuga
 
-# # 1) declare the names and stable integer ids
-# boundary_tags = {"inlet": 1, "outlet": 2, "sides": 3}
+# 1) declare the names and stable integer ids
+boundary_tags = {"inlet": 1, "outlet": 2, "sides": 3}
 
-# # 2) build tagged_elements: int id -> list[ (tri_id, edge_idx) ]
-# tagged_elements = {i: [] for i in boundary_tags.values()}
+# 2) build tagged_elements: int id -> list[ (tri_id, edge_idx) ]
+tagged_elements = {i: [] for i in boundary_tags.values()}
 
-# for (tri_e, name) in boundary_map.items():
-#     tri_id, e = tri_e
-#     # be strict about Python int (not numpy types)
-#     tri_id = int(tri_id); e = int(e)
-#     if name not in boundary_tags:
-#         raise ValueError(f"Unknown tag name in boundary_map: {name}")
-#     tagged_elements[boundary_tags[name]].append((tri_id, e))
+for (tri_e, name) in boundary_map.items():
+    tri_id, e = tri_e
+    # be strict about Python int (not numpy types)
+    tri_id = int(tri_id); e = int(e)
+    if name not in boundary_tags:
+        raise ValueError(f"Unknown tag name in boundary_map: {name}")
+    tagged_elements[boundary_tags[name]].append((tri_id, e))
 
-# assert pts.ndim == 2 and pts.shape[1] == 2
-# assert tris.ndim == 2 and tris.shape[1] == 3
-# if not np.issubdtype(tris.dtype, np.integer):
-#     tris = tris.astype(np.int64, copy=False)
+assert pts.ndim == 2 and pts.shape[1] == 2
+assert tris.ndim == 2 and tris.shape[1] == 3
+if not np.issubdtype(tris.dtype, np.integer):
+    tris = tris.astype(np.int64, copy=False)
 
-# # boundary_map: {(tri_id:int, edge:int[0..2]) : 'inlet'/'outlet'/'sides'}
-# assert isinstance(boundary_map, dict) and len(boundary_map) > 0
+# boundary_map: {(tri_id:int, edge:int[0..2]) : 'inlet'/'outlet'/'sides'}
+assert isinstance(boundary_map, dict) and len(boundary_map) > 0
 
-# # Build the Domain WITH boundary only 
-# domain.boundary = boundary_map
+# Build the Domain WITH boundary only 
+domain.boundary = boundary_map
 
-# # boundary tag names from the map
-# existing_tags = sorted(set(boundary_map.values()))
-# print("Existing boundary tags on domain:", existing_tags)
+import dill
 
-# # Build BC dict only for available tags 
-# Bc = {}
-# if "outlet" in existing_tags:
-#     #Bc["outlet"] = anuga.Transmissive_stage_zero_momentum_boundary(domain)
-#     Bc["outlet"] = anuga.Transmissive_boundary(domain)
-# if "inlet" in existing_tags:
-#     pass
-# if "sides" in existing_tags:
-#     Bc["sides"] = anuga.Reflective_boundary(domain)
+# Save boundary map for later use
+f_boundary_map = os.path.join(model_inputs_dir, 'boundary_map.pkl')
+with open(f_boundary_map, 'wb') as f:
+    dill.dump(boundary_map, f)
 
-# if not Bc and "exterior" in existing_tags:
-#     Bc["exterior"] = anuga.Reflective_boundary(domain)
-
-# #Apply
-# if "outlet" not in existing_tags:
-#     print("WARNING: outlet tag not available")
-# domain.set_boundary(Bc)
-# print("boundary applied.")
+# Print boundary_map summary
+from collections import Counter
+tag_counts = Counter(boundary_map.values())
+print("Boundary map summary:")
+for name, count in tag_counts.items():
+    print(f"  {name}: {count} edges")   
 
 
 
-# Initialize discharge inlet
-inlet_ATC = anuga.Inlet_operator(domain, discharge_loc, Q = discharge_function(0))
-# Assign Friction
-domain.set_quantity('friction', 0.03, location = 'centroids') # Manning N
-
-# # In[38]:
-# #print interpolated levels
-# level_ts
 
 
-# # In[39]:
-
-# allowed_tags = sorted(set(domain.boundary.values()))
-# print("Allowed tags for this domain:", allowed_tags)
-
-# Bc = {}
-
-# Outlet: time-varying stage, zero momentum
-def stage_func(t):
-    return float(level_function(t)) 
-
-# try:
-#    outlet_bc = anuga.Time_stage_zero_momentum_boundary(domain, stage_func)
-#except AttributeError:
-#    outlet_bc = anuga.Time_stage_zero_momentum_boundary(domain, function=stage_func)
-
-outlet_bc = anuga.Transmissive_n_momentum_zero_t_momentum_set_stage_boundary(domain, stage_func)
-
-# Sides are reflective
-from anuga import Reflective_boundary
-sides_bc = Reflective_boundary(domain)
-
-#print(domain.boundary_tags)
-allowed_tags = sorted(set(domain.boundary.values()))
-print("Allowed tags for this domain:", allowed_tags)
-Bc = {}
-if 'outlet' in allowed_tags:
-    Bc['outlet'] = outlet_bc
-if 'sides' in allowed_tags:
-    Bc['sides'] = sides_bc
-
-domain.set_boundary(Bc)
-
-
-# In[40]:
-# Run the model
-timestep = sim_timestep.total_seconds()
-finaltime = (sim_time.shape[0]-1)*timestep
-total_number_of_steps = sim_time.shape[0]
-#for n, t in tqdm(enumerate(domain.evolve(yieldstep=timestep, finaltime=finaltime)), 
-#                          total=total_number_of_steps):
-for n, t in enumerate(domain.evolve(yieldstep=timestep, finaltime=finaltime)):
-    
-    # Update discharge value at the inlet
-    inlet_ATC.Q = discharge_function(t)
-
-    # Optional, report volume conservation at some intervals
-    if anuga.myid == 0 and n % 1 == 0:
-        #print(f"\nTime = {t:.2f} s (step {n})")
-        domain.print_timestepping_statistics()
-
-    domain.report_water_volume_statistics()
-
-    # Check for negative depths
-    #shallow = domain.quantities['stage'].centroid_values - domain.quantities['elevation'].centroid_values
-    #if (shallow < 0).any():
-    #    print("Warning: Negative centroid water depths detected.")
-
-    # or log to a file for warnings
-
-
-# In[42]:
-
-
-model_name
-
-
-# In[41]:
-
-import shutil
-# Save output to the dedicated directory
-f_anuga_output_in = os.path.join(workshop_dir, "20140702000000_Shellmouth_flood_12_days.sww")
-f_anuga_output_out = os.path.join(model_outputs_dir, "20140702000000_Shellmouth_flood_12_days.sww")
-
-shutil.copy2(f_anuga_output_in, f_anuga_output_out)
-
-# In[ ]:
 
 
 
