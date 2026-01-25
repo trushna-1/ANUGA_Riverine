@@ -67,9 +67,12 @@ domain = anuga.Domain(coordinates=pts, vertices=tris, boundary=boundary_map, ver
 #domain.set_boundary({'exterior': Reflective_boundary(domain)})
 
 
-
+domain.print_statistics()
 # import os
 # import numpy as np
+domain.set_plotter()
+domain.plot_mesh()
+
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
@@ -526,7 +529,7 @@ domain.set_quantity('friction', 0.03, location = 'centroids') # Manning N
 
 # Bc = {}
 
-# Outlet: time-varying stage, zero momentum
+# Outlet: time-varying stage, transmissive momentum
 def stage_func(t):
     return float(level_function(t)) 
 

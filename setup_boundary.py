@@ -443,10 +443,6 @@ if n_outlet == 0:
             )
 
 
-# In[35]:
-
-# In[36]:
-
 
 # Tag boundaries
 from collections import defaultdict
